@@ -1,0 +1,68 @@
+{
+  "id": "coffee-pub-vault",
+  "title": "Coffee Pub Vault",
+  "description": "Optional Assets for the Coffee Pub suite of modules.",
+  "version": "13.0.0",
+  
+  "manifest": "https://github.com/Drowbe/coffee-pub-vault/releases/latest/download/module.json",
+  "download": "https://github.com/Drowbe/coffee-pub-vault/releases/latest/download/coffee-pub-vault.zip",
+  "url": "https://github.com/Drowbe/coffee-pub-vault",
+  "bugs": "https://github.com/Drowbe/coffee-pub-vault/issues",
+  "readme": "README.md",
+  "changelog": "CHANGELOG.md",
+  "license": "LICENSE",
+  
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13",
+    "maximum": "14"
+  },
+  "socket": false,
+  "library": false,
+
+  "authors": [
+    {
+      "name": "COFFEE PUB",
+      "discord": "drowbe",
+      "url": "https://github.com/Drowbe",
+      "patreon": "Coffee Pub",
+      "github": "Drowbe",
+      "flags": {
+        "isMaintainer": true,
+        "contribution": "owner"
+      }
+    }
+  ],
+  
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json",
+      "flags": {}
+    }
+  ],
+  "styles": [
+    "styles/default.css"
+  ],
+  "esmodules": [
+    "scripts/const.js",
+    "scripts/settings.js",
+    "scripts/vault.js"
+  ],
+  "packs": [],
+  
+  "relationships": {
+    "systems": [],
+    "requires": [
+      {
+        "id": "coffee-pub-blacksmith",
+        "type": "module",
+        "manifest": "https://github.com/Drowbe/coffee-pub-blacksmith/releases/latest/download/module.json",
+        "compatibility": {}
+      }
+    ],
+    "conflicts": []
+  }
+}
+
