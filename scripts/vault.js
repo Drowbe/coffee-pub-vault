@@ -21,15 +21,24 @@ Hooks.once('ready', async () => {
         // Register settings FIRST during the ready phase
         registerSettings();
         
-        // Register module with Blacksmith
-        if (typeof BlacksmithModuleManager !== 'undefined') {
-            BlacksmithModuleManager.registerModule(MODULE.ID, {
+        // Register with Blacksmith — globals may appear after this module's ready handler (load order)
+        const registerVaultWithBlacksmith = () => {
+            if (!globalThis.BlacksmithModuleManager?.registerModule) return false;
+            globalThis.BlacksmithModuleManager.registerModule(MODULE.ID, {
                 name: MODULE.NAME,
                 version: MODULE.VERSION
             });
             console.log(`✅ ${MODULE.NAME}: Registered with Blacksmith successfully`);
-        } else {
-            console.warn(`⚠️ ${MODULE.NAME}: Blacksmith not available`);
+            return true;
+        };
+        if (!registerVaultWithBlacksmith()) {
+            setTimeout(() => {
+                if (!registerVaultWithBlacksmith()) {
+                    console.warn(
+                        `⚠️ ${MODULE.NAME}: Blacksmith module manager not available; enable and load coffee-pub-blacksmith before this module.`
+                    );
+                }
+            }, 0);
         }
         
         // Initialize module features
@@ -49,6 +58,20 @@ Hooks.once('ready', async () => {
 Hooks.once('ready', async () => {
 
     const TEST_MODULE_ID = MODULE.ID;
+
+    const blacksmithActive = game.modules.get('coffee-pub-blacksmith')?.active;
+    if (
+        !blacksmithActive
+        || !globalThis.BlacksmithConstants
+        || !globalThis.BlacksmithUtils
+        || !globalThis.BlacksmithHookManager
+        || !globalThis.BlacksmithModuleManager
+    ) {
+        console.warn(
+            `${MODULE.NAME}: Skipping Blacksmith API tests (Blacksmith inactive or API globals not ready).`
+        );
+        return;
+    }
 
     try {
         // ----- CONSTANTS TEST INSTRUCTIONS
@@ -246,8 +269,8 @@ Hooks.once('ready', async () => {
         console.error('API TEST | BLACKSMITH TEST: Error during testing:', error);
 
         // Try to log the error with Blacksmith if available
-        if (BlacksmithUtils && BlacksmithUtils.postConsoleAndNotification) {
-            BlacksmithUtils.postConsoleAndNotification(
+        if (globalThis.BlacksmithUtils?.postConsoleAndNotification) {
+            globalThis.BlacksmithUtils.postConsoleAndNotification(
                 TEST_MODULE_ID,
                 'API TEST | BLACKSMITH TEST: Error occurred during testing',
                 { error: error?.message, stack: error?.stack },
