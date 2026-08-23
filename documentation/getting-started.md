@@ -179,6 +179,7 @@ Your module will leverage Blacksmith's APIs:
 - **Toolbar API**: Register tools in Blacksmith/Foundry toolbars
 - **Menubar API**: Add items to the menubar
 - **Socket System**: Cross-client communication
+- **Window Base Classes**: `BlacksmithWindowBaseV2` / `BlacksmithToolWindowBaseV2` for themed windows
 
 ## Next Steps After Setup
 
@@ -216,11 +217,106 @@ BlacksmithHookManager.registerHook({
     description: 'Description',
     context: MODULE.ID,
     priority: 3,
+    canCancel: false, // only true if this callback deliberately vetoes a pre* hook
     callback: (args) => {
         // Your hook logic
     }
 });
 ```
+
+### Cancelling a pre* Hook
+Returning a falsy value from a callback does **not** cancel the operation unless you declare
+`canCancel: true`. This is deliberate: one Foundry handler serves every callback registered on a
+hook name, so an undeclared callback whose natural return value happens to be `false` would block
+the operation for every module in the world.
+
+```javascript
+BlacksmithHookManager.registerHook({
+    name: 'preCreateItem',
+    description: 'Block forbidden items',
+    context: MODULE.ID,
+    canCancel: true, // top level - NOT inside `options`
+    callback: (item) => {
+        if (isForbidden(item)) return false; // now actually cancels
+    }
+});
+```
+
+- `canCancel` goes at the **top level** of the config object. Placing it inside `options` logs a
+  warning and does nothing.
+- A declared canceller also stops later callbacks on that hook, matching Foundry's own behaviour.
+- Watch for accidental cancels: `callback: (doc) => this.tracked.has(doc.id)` on a `pre*` hook
+  returns a boolean. Without `canCancel` it is inert; with it, it vetoes.
+
+### Extending a Blacksmith Window
+Import the base classes and style constants from the API bridge. The bridge is a real ES module, so
+it resolves at evaluation time, which is when `extends` is evaluated.
+
+```javascript
+import {
+    BlacksmithWindowBaseV2,
+    BlacksmithToolWindowBaseV2,
+    BLACKSMITH_WINDOW_STYLES,
+    BLACKSMITH_TOOL_TITLEBARS,
+    BLACKSMITH_TOOL_THEMES
+} from '/modules/coffee-pub-blacksmith/api/blacksmith-api.js';
+
+export class MyWindow extends BlacksmithWindowBaseV2 { }
+```
+
+**Do not** resolve these from `module.api` at the top level of your script:
+
+```javascript
+// WRONG - throws at module evaluation time
+const api = game.modules.get('coffee-pub-blacksmith').api;
+export class MyWindow extends api.WindowBaseV2 { }
+```
+
+`game` does not exist when your module script is evaluated, so this throws
+`Cannot read properties of undefined (reading 'get')`. ES modules cache a failed evaluation, so the
+throw disables your module for the whole session rather than being retried.
+
+`module.api` remains correct for anything you resolve **after** `init`. The constants exported from
+the bridge are the same objects as `api.windowStyles`, `api.toolTitlebars` and `api.toolThemes`.
+
+### Waiting for Blacksmith to Be Ready
+The `BlacksmithUtils`, `BlacksmithHookManager`, `BlacksmithModuleManager` and `BlacksmithConstants`
+globals do **not** exist merely because Foundry fired `ready`. Blacksmith assigns them from
+`markReadyForConsumers()`, which it calls at the *end* of its own `ready` handler, after several
+`await`s (dynamic import, asset-bundle fetch and merge).
+
+Every synchronous `ready` handler in the world has already run and returned by then. A
+`setTimeout(..., 0)` retry fires on the next macrotask and still loses the race. Await the bridge
+instead:
+
+```javascript
+import { BlacksmithAPI } from '/modules/coffee-pub-blacksmith/api/blacksmith-api.js';
+
+async function awaitBlacksmith(timeoutMs = 30000) {
+    if (!game.modules.get('coffee-pub-blacksmith')?.active) return false;
+
+    // waitForReady() is only ever RESOLVED, never rejected - and never settles at all if
+    // Blacksmith dies before markReadyForConsumers(). Race it so that cannot hang your init.
+    let timer;
+    const timedOut = new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
+    const ready = BlacksmithAPI.waitForReady().then(() => true);
+    const result = await Promise.race([ready, timedOut]);
+    clearTimeout(timer);
+    return result;
+}
+
+Hooks.once('ready', async () => {
+    registerSettings(); // synchronous - do not make this wait on Blacksmith
+
+    if (await awaitBlacksmith()) {
+        BlacksmithModuleManager.registerModule(MODULE.ID, { name: MODULE.NAME, version: MODULE.VERSION });
+    }
+});
+```
+
+`BlacksmithAPI.getUtils()`, `getHookManager()`, `getModuleManager()` and friends already await
+readiness internally, so `const utils = await BlacksmithAPI.getUtils()` is equivalent for a single
+sub-API. Use the globals only after you have awaited readiness once.
 
 ### Using Blacksmith Utilities
 ```javascript
@@ -298,7 +394,7 @@ console.log('ModuleManager:', typeof BlacksmithModuleManager);
 
 ### Blacksmith Integration Failing
 - Ensure Coffee Pub Blacksmith is installed and enabled
-- Check that you're using the `ready` hook (not `init`)
+- Check that you're using the `ready` hook (not `init`), and that you `await` Blacksmith readiness inside it
 - Verify module registration code is correct
 - Check console for Blacksmith availability warnings
 - Try running `console.log(typeof BlacksmithModuleManager)` in console to verify availability
@@ -314,7 +410,8 @@ console.log('ModuleManager:', typeof BlacksmithModuleManager);
 ### Common JavaScript Errors
 - **"Cannot read property of undefined"** - Check that objects exist before accessing properties
 - **"Module not found"** - Verify file paths in `module.json` are correct
-- **"Blacksmith not available"** - Blacksmith must load before your module; ensure you're using `ready` hook
+- **"Blacksmith not available" / "module manager not available" during `ready`** - the `Blacksmith*` globals are populated near the END of Blacksmith's own `ready` handler, after several awaits. Being in `ready` is not enough; see "Waiting for Blacksmith to Be Ready"
+- **"Cannot read properties of undefined (reading 'get')" at load, module dead for the session** - you touched `game.modules.get(...)` at the top level of a script. Import from the API bridge instead; see "Extending a Blacksmith Window"
 - **Syntax errors** - Check for missing brackets, quotes, or semicolons
 
 ### Performance Issues
@@ -389,6 +486,7 @@ BlacksmithHookManager.registerHook({
     description: 'Description of what this hook does',
     context: MODULE.ID, // Use module ID for context
     priority: 3, // 1=Critical, 2=High, 3=Normal, 4=Low, 5=Lowest
+    canCancel: false, // top level, NOT inside `options` - see "Cancelling a pre* Hook"
     callback: (args) => {
         // BEGIN - HOOKMANAGER CALLBACK
             // Your hook logic here

@@ -9,8 +9,36 @@ import { registerSettings } from './settings.js';
 // ===== BLACKSMITH API INTEGRATION =================================
 // ================================================================== 
 
-// Import Blacksmith API bridge
+// Import Blacksmith API bridge. This is a real ES module, so it resolves at evaluation time --
+// unlike `game.modules.get(...)`, which does not exist yet while module scripts evaluate.
 import { BlacksmithAPI } from '/modules/coffee-pub-blacksmith/api/blacksmith-api.js';
+
+const BLACKSMITH_ID = 'coffee-pub-blacksmith';
+
+/**
+ * Wait until Blacksmith's API and its `Blacksmith*` globals are actually populated.
+ *
+ * Blacksmith assigns those globals from `markReadyForConsumers()`, which it calls at the END of its
+ * own `ready` handler -- after several `await`s (dynamic import, asset-bundle fetch and merge). Every
+ * synchronous `ready` handler in the world, including ours, has therefore already run and returned by
+ * the time they exist. A `setTimeout(..., 0)` retry fires on the next macrotask and still loses that
+ * race, which is exactly the "Blacksmith module manager not available" warning this replaces.
+ *
+ * @param {number} timeoutMs Give up after this long rather than hanging forever.
+ * @returns {Promise<boolean>} true if the API came up, false if Blacksmith is inactive or timed out.
+ */
+async function awaitBlacksmith(timeoutMs = 30000) {
+    if (!game.modules.get(BLACKSMITH_ID)?.active) return false;
+
+    // waitForReady() is only ever RESOLVED, never rejected -- and never settles at all if Blacksmith
+    // dies before markReadyForConsumers(). Race it so a broken Blacksmith cannot hang our init.
+    let timer;
+    const timedOut = new Promise((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
+    const ready = BlacksmithAPI.waitForReady().then(() => true);
+    const result = await Promise.race([ready, timedOut]);
+    clearTimeout(timer);
+    return result;
+}
 
 // ================================================================== 
 // ===== MODULE INITIALIZATION ======================================
@@ -21,26 +49,19 @@ Hooks.once('ready', async () => {
         // Register settings FIRST during the ready phase
         registerSettings();
         
-        // Register with Blacksmith — globals may appear after this module's ready handler (load order)
-        const registerVaultWithBlacksmith = () => {
-            if (!globalThis.BlacksmithModuleManager?.registerModule) return false;
+        // Register with Blacksmith once its API is genuinely up (see awaitBlacksmith above)
+        if (await awaitBlacksmith()) {
             globalThis.BlacksmithModuleManager.registerModule(MODULE.ID, {
                 name: MODULE.NAME,
                 version: MODULE.VERSION
             });
             console.log(`✅ ${MODULE.NAME}: Registered with Blacksmith successfully`);
-            return true;
-        };
-        if (!registerVaultWithBlacksmith()) {
-            setTimeout(() => {
-                if (!registerVaultWithBlacksmith()) {
-                    console.warn(
-                        `⚠️ ${MODULE.NAME}: Blacksmith module manager not available; enable and load coffee-pub-blacksmith before this module.`
-                    );
-                }
-            }, 0);
+        } else {
+            console.warn(
+                `⚠️ ${MODULE.NAME}: Blacksmith API never became ready; enable coffee-pub-blacksmith and check its console for a bail-out.`
+            );
         }
-        
+
         // Initialize module features
         initializeModule();
         
@@ -59,9 +80,11 @@ Hooks.once('ready', async () => {
 
     const TEST_MODULE_ID = MODULE.ID;
 
-    const blacksmithActive = game.modules.get('coffee-pub-blacksmith')?.active;
+    // Same gate as above: the Blacksmith* globals do not exist until markReadyForConsumers() runs,
+    // which is several awaits into Blacksmith's own ready handler.
+    const blacksmithReady = await awaitBlacksmith();
     if (
-        !blacksmithActive
+        !blacksmithReady
         || !globalThis.BlacksmithConstants
         || !globalThis.BlacksmithUtils
         || !globalThis.BlacksmithHookManager
